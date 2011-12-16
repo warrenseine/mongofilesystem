@@ -2,15 +2,15 @@
 /**
  * MongoFs
  *
- * @copyright Copyright (c) 2011 Harald Hanek
+ * @copyright Copyright (c) 2011 Harald Hanek, Warren Seine
  * @license http://www.opensource.org/licenses/mit-license.php
  */
-class MongoFs
+class MongoFS
 {
-	const WEBSAFE = true;
-
+  protected $_mg;
 	protected $_db;
 	protected $_fs;
+	protected $_dbName;
 
 	protected $_tmpfile = array();
 
@@ -20,7 +20,20 @@ class MongoFs
 
 	public function __construct($db)
 	{
-		$this->_db = $db;
+	  $this->_mg = new Mongo();
+
+	  $this->_dbName = $db;
+		$this->_db = $this->_mg->selectDB($this->_dbName);
+		$this->_fs = $this->_db->getGridFS($this->_collectionFs);
+	}
+	
+	/**
+	 * Reset the file system
+	 */
+	public function reset()
+	{
+	  $this->_db->drop();
+		$this->_db = $this->_mg->selectDB($this->_dbName);
 		$this->_fs = $this->_db->getGridFS($this->_collectionFs);
 	}
 
@@ -44,7 +57,7 @@ class MongoFs
 	 */
 	private function _s($filename, $record)
 	{
-		if($record->file['type'] == 'file')
+		if ($record->file['type'] == 'file')
 			$this->_tmpfile[trim($filename, '/')] = $record;
 	}
 
@@ -56,7 +69,7 @@ class MongoFs
 	 */
 	public function get($id)
 	{
-		if(($fe = $this->_fs->findOne(array(
+		if (($fe = $this->_fs->findOne(array(
 			'_id' => new MongoId($id)
 		))) != null)
 		{
@@ -73,7 +86,7 @@ class MongoFs
 	 */
 	public function etag($filename)
 	{
-		if(($fe = $this->readfile($filename)) != false)
+		if (($fe = $this->readfile($filename)) != false)
 			return $fe->file['md5'];
 
 		return null;
@@ -87,7 +100,7 @@ class MongoFs
 	 */
 	public function mimetype($filename)
 	{
-		if(($fe = $this->readfile($filename)) != false)
+		if (($fe = $this->readfile($filename)) != false)
 		{
 			if(isset($fe->file['mimetype']))
 			{
@@ -106,6 +119,7 @@ class MongoFs
 	 */
 	public function fileatime($filename)
 	{
+	  // FIXME: Write it.
 	}
 
 	
@@ -116,9 +130,9 @@ class MongoFs
 	 */
 	public function filemtime($filename)
 	{
-		if(($fe = $this->readfile($filename)) != false)
+		if (($fe = $this->readfile($filename)) != false)
 		{
-			if(isset($fe->file['uploadDate']))
+			if (isset($fe->file['uploadDate']))
 			{
 				$date = $fe->file['uploadDate'];
 				return $date->sec;
@@ -151,6 +165,8 @@ class MongoFs
 	 */
 	public function filetype($filename)
 	{
+		$finfo = new finfo(FILEINFO_MIME);
+    return $finfo->file($filename);
 	}
 
 
@@ -162,12 +178,12 @@ class MongoFs
 	 */
 	public function is_file($filename, $returnObject = false)
 	{
-		if(($fe = $this->_g($filename)) || ($fe = $this->_fs->findOne(array(
+		if (($fe = $this->_g($filename)) || ($fe = $this->_fs->findOne(array(
 			'type' => 'file', 'filename' => trim($filename, '/')
 		))) != null)
 		{
 			$this->_s($filename, $fe);
-			if($returnObject)
+			if ($returnObject)
 				return $fe;
 			return true;
 		}
@@ -182,7 +198,7 @@ class MongoFs
 	 */
 	public function file_exists($filename)
 	{
-		if(($fe = $this->_g($filename)) || ($fe = $this->_fs->findOne(array(
+		if (($fe = $this->_g($filename)) || ($fe = $this->_fs->findOne(array(
 				'type' => array(
 					'$in' => array(
 						'folder', 'file'
@@ -194,17 +210,8 @@ class MongoFs
 			$this->_s($filename, $fe);
 			return true;
 		}
+		
 		return false;
-	}
-
-
-	/**
-	 * Returns trailing name component of path
-	 * @param string $path
-	 * @return Returns the base name of the given path.
-	 */
-	public function basename($path)
-	{
 	}
 
 
@@ -215,8 +222,27 @@ class MongoFs
 	 */
 	public function readfile($filename)
 	{
-		if(($fe = $this->_g($filename)) || ($fe = $this->_fs->findOne(array(
+		if (($fe = $this->_g($filename)) || ($fe = $this->_fs->findOne(array(
 			'type' => 'file', 'filename' => trim($filename, '/')
+		))) != null)
+		{
+			$this->_s($filename, $fe);
+			return $fe;
+		}
+		
+		return false;
+	}
+	
+	
+	/**
+	 * Outputs a directory
+	 * @param string $filename
+	 * @return Returns the directory specified by path or FALSE on failure.
+	 */
+	public function readdir($filename)
+	{
+		if (($fe = $this->_g($filename)) || ($fe = $this->_fs->findOne(array(
+			'type' => 'folder', 'filename' => trim($filename, '/')
 		))) != null)
 		{
 			$this->_s($filename, $fe);
@@ -233,7 +259,7 @@ class MongoFs
 	 */
 	public function file_get_contents($filename)
 	{
-		if(($fe = $this->_fs->findOne(array(
+		if (($fe = $this->_fs->findOne(array(
 			'filename' => trim($filename, '/')
 		))) != null)
 		{
@@ -253,26 +279,24 @@ class MongoFs
 	public function file_put_contents($filename, $data, $options = null)
 	{
 		$file = trim($filename, '/');
+		$id = null;
 
-		if(gettype($data) == 'resource')
+		if (gettype($data) == 'resource')
 		{
 			$s = stream_get_contents($data);
 			fclose($data);
 			$data = $s;
 		}
 
-		// @todo mime_type ueber extension im name rausholen				
-		// @mime_content_type($data)
-
 		// check if exists
-		if(($fe = $this->_fs->findOne(array(
+		if (($fe = $this->_fs->findOne(array(
 			'filename' => $file
 		))) != null)
 		{
 			$id = $fe->file['_id'];
-			if(md5($data) == $fe->file['md5'])
+			if (md5($data) == $fe->file['md5'])
 			{
-				return $id; // dateien sind identisch
+				return $id; // Files are identical.
 			}
 			$this->_fs->remove(array(
 				'_id' => $id
@@ -285,10 +309,11 @@ class MongoFs
 
 		$path = implode('/', array_slice($p, 0, count($p)));
 
-		// @todo auto ordner dafuer erstellen
 		$this->mkdir($path);
 
 		$parent = count($p) > 1 ? implode('/', array_slice($p, 0, count($p) - 1)) : null;
+
+		$finfo = new finfo(FILEINFO_MIME);
 
 		$meta = array(
 				'name' => $name,
@@ -296,10 +321,11 @@ class MongoFs
 				'path' => $path,
 				'parent' => $parent,
 				'type' => 'file',
-				'meta' => $options,
-				'filetype' => null
+				'mimetype' => $finfo->buffer($data),
+				'meta' => $options
 		);
-		if(isset($id))
+
+		if ($id !== null)
 			$meta['_id'] = $id;
 
 		return $this->_fs->storeBytes($data, $meta);
@@ -316,16 +342,17 @@ class MongoFs
 	public function import($filename, $realfile, $options = null)
 	{
 		$file = trim($filename, '/');
+		$id = null;
 
 		// check if exists
-		if(($fe = $this->_fs->findOne(array(
+		if (($fe = $this->_fs->findOne(array(
 			'filename' => $file
 		))) != null)
 		{
 			$id = $fe->file['_id'];
-			if(md5_file($realfile) == $fe->file['md5'])
+			if (md5_file($realfile) == $fe->file['md5'])
 			{
-				return $id; // dateien sind identisch
+				return $id; // Files are identical.
 			}
 			$this->_fs->remove(array(
 				'_id' => $id
@@ -338,7 +365,6 @@ class MongoFs
 
 		$path = implode('/', array_slice($p, 0, count($p)));
 
-		// @todo auto ordner dafuer erstellen
 		$this->mkdir($path);
 
 		$parent = count($p) > 1 ? implode('/', array_slice($p, 0, count($p) - 1)) : null;
@@ -349,10 +375,11 @@ class MongoFs
 				'path' => $path,
 				'parent' => $parent,
 				'type' => 'file',
-				'mimetype' => GFileHelper::getMimeTypeByExtension($realfile),
+				'mimetype' => $this->filetype($realfile),
 				'meta' => $options
 		);
-		if(isset($id))
+		
+		if ($id !== null)
 			$meta['_id'] = $id;
 
 		return $this->_fs->storeFile($realfile, $meta);
@@ -376,18 +403,18 @@ class MongoFs
 		$p = explode('/', $newname);
 		$name = array_pop($p);
 
-		if($this->file_exists($newname))
+		if ($this->file_exists($newname))
 		{
-			if($overwrite === true)
+			if ($overwrite === true)
 				$this->unlink($newname);
 			else
 				throw new Exception("Could not rename '" . $oldname . "'. A file or folder with the specified name already exists");
 		}
 
 
-		if($this->is_file($oldname))
+		if ($this->is_file($oldname))
 		{
-			if(($fe = $this->_db->selectCollection($this->_collectionFolders)->findOne(array(
+			if (($fe = $this->_db->selectCollection($this->_collectionFolders)->findOne(array(
 				'type' => 'file', 'filename' => $oldname
 			))) != null)
 			{
@@ -411,9 +438,9 @@ class MongoFs
 			}
 		}
 
-		if($this->is_dir($oldname))
+		if ($this->is_dir($oldname))
 		{
-			if(($cursor = $this->_db->selectCollection($this->_collectionFolders)->find(array(
+			if (($cursor = $this->_db->selectCollection($this->_collectionFolders)->find(array(
 					'type' => array(
 						'$in' => array(
 							'folder', 'file'
@@ -429,11 +456,10 @@ class MongoFs
 					)
 			))) != null)
 			{
-				foreach($cursor as $record)
+				foreach ($cursor as $record)
 				{
-					if($record['filename'] == $oldname)
+					if ($record['filename'] == $oldname)
 					{
-						// der hauptordner
 						$meta = array(
 								'$set' => array(
 										'name' => $name,
@@ -476,7 +502,7 @@ class MongoFs
 	
 	private function _strr($string, $oldname, $newname)
 	{
-		if(strpos($string, $oldname) === 0)
+		if (strpos($string, $oldname) === 0)
 		{
 			return substr_replace($string, $newname, 0, strlen($oldname));
 		}
@@ -524,20 +550,19 @@ class MongoFs
 	 */
 	public function copy($source, $dest)
 	{
+	  return false;
 	}
 
 
 	/**
 	 * List files and directories inside the specified path
 	 * @param string $path
-	 * @param number $sortorder
+	 * @param bool $hide
 	 * @return Returns an array of files and directories from the directory or NULL.
 	 */
-	public function scandir($path, $sortorder = 0)
+	public function scandir($path, $hide = true)
 	{
 		$path = trim($path, '/');
-
-		$sortorder = ($sortorder === 1) ? -1 : 1;
 
 		$criteria = array(
 				'$or' => array(
@@ -552,23 +577,23 @@ class MongoFs
 
 
 		$sort = array(
-			'type' => -1, 'name' => $sortorder
+			'type' => -1, 'name' => -1
 		);
 
 
-		if(($cursor = $this->_fs->find($criteria)->sort($sort)) != null)
+		if (($cursor = $this->_fs->find($criteria)->sort($sort)) != null)
 		{
 			$p = explode('/', $path);
 
 			$tmp = array();
 
-			if(count($p) > 1)
+			if (!$hide && count($p) > 1)
 			{
 				array_push($tmp, '.');
 				array_push($tmp, '..');
 			}
 
-			foreach($cursor as $record)
+			foreach ($cursor as $record)
 			{
 				$this->_s($record->file['filename'], $record);
 				array_push($tmp, $record->file['name']);
@@ -576,15 +601,6 @@ class MongoFs
 			return $tmp;
 		}
 		return null;
-	}
-
-
-	/**
-	 * Read entry from directory handle
-	 * @param resource $dir
-	 */
-	public function readdir($dir)
-	{
 	}
 
 
@@ -598,7 +614,7 @@ class MongoFs
 	{
 		$dir = trim($dir, '/');
 
-		if($this->is_dir($dir))
+		if ($this->is_dir($dir))
 		{
 			if(($cursor = $this->_fs->find(array(
 					'type' => array(
@@ -616,7 +632,7 @@ class MongoFs
 					)
 			))) != null)
 			{
-				foreach($cursor as $record)
+				foreach ($cursor as $record)
 				{
 					$id = $record->file['_id'];
 					$this->_fs->remove(array(
@@ -649,29 +665,34 @@ class MongoFs
 	 * @param boolean $recursive
 	 * @return Returns TRUE on success or FALSE on failure.
 	 */
-	public function mkdir($path, $recursive = true)
+	public function mkdir($path, $options = null, $recursive = true)
 	{
 		$path = trim($path, '/');
 
-		if($this->is_dir($path))
-		{
+		if ($this->is_dir($path))
 			return true;
-		}
 
-		$this->is_dir($this->dirname($path)) || $this->mkdir($this->dirname($path), $recursive);
+		$this->is_dir($this->dirname($path)) ||
+		$this->mkdir($this->dirname($path), $options, $recursive);
+		
 		$p = explode('/', $path);
 
 		$parent = count($p) > 1 ? implode('/', array_slice($p, 0, count($p) - 1)) : null;
+		
+		if (!$options)
+		{
+		  $options = $this->readdir($parent, true)->file['meta'];
+		}
 
 		$name = array_pop($p);
-
+		
 		$meta = array(
 				'name' => $name,
 				'filename' => $path,
 				'path' => $path,
 				'parent' => $parent,
 				'type' => 'folder',
-				'meta' => null
+				'meta' => $options
 		);
 
 		return $this->_db->selectCollection($this->_collectionFolders)->insert($meta, array(
@@ -688,15 +709,14 @@ class MongoFs
 	 */
 	public function is_dir($path, $returnObject = false)
 	{
-		if(trim($path) == '')
+		if (trim($path) == '')
 			return true;
 
-		if(($fe = $this->_db->selectCollection($this->_collectionFolders)->findOne(array(
+		if (($fe = $this->_db->selectCollection($this->_collectionFolders)->findOne(array(
 			'type' => 'folder', 'filename' => trim($path, '/')
 		))) != null)
 		{
-
-			if($returnObject)
+			if ($returnObject)
 				return $fe;
 			return true;
 		}
@@ -706,11 +726,29 @@ class MongoFs
 
 	/**
 	 * Changes file mode
-	 * @param string $filename
+	 * @param string $path
 	 * @param int $mode
 	 * @return Returns TRUE on success or FALSE on failure.
 	 */
-	public function chmod($filename, $mode)
+	public function chmod($path, $mode)
 	{
+	  $fe = $this->readfile($path) || $this->readdir($path);
+	  
+	  if (!$fe)
+	    return false;
+	    
+		$meta = array(
+				'$set' => array(
+						'permissions' => $mode
+				)
+		);
+
+		$this->_db->selectCollection($this->_collectionFolders)->update(array(
+			'_id' => $fe['_id']
+		), $meta, array(
+			"safe" => true
+		));
+
+		return true;
 	}
 }
